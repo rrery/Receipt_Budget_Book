@@ -15,9 +15,18 @@ def main():
         print("버킷에 이미지 파일이 없습니다. Supabase에 이미지를 먼저 업로드해 주세요.")
         return
         
+    print(f"총 {len(images)}개의 이미지를 발견했습니다. 전체 분석을 시작합니다.\n" + "="*40)
+
     # 테스트를 위해 스토리지의 첫 번째 이미지 선택
-    target_image = images[0]['name']
-    print(f"선택된 이미지: {target_image}")
+    for idx, img_info in enumerate(images, start=1):
+        target_image = img_info['name']
+        
+        # .emptyFolderPlaceholder 같은 시스템 특수 파일은 건너넙니다.
+        if target_image.startswith('.'):
+            continue
+            
+        print(f"\n[{idx}/{len(images)}] 작업 시작 -> 파일명: {target_image}")
+
     
     # 2. 이미지의 Public URL 가져오기
     image_url = db_manager.get_image_url(target_image, bucket_name="image")
