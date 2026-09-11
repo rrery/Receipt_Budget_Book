@@ -119,6 +119,9 @@ def build_receipt_sample(ocr_raw_id, items, image_path, image):
         polygon = item.get("box")
         label = item.get("label")
 
+        if label:
+            label = label.strip()
+
         if not text or not polygon or not label:
             continue
 
