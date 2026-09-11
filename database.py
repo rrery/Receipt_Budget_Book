@@ -7,11 +7,42 @@ class SupabaseManager:
         self.key = "sb_publishable_ZX9Jjwq6LNFYMAlfu5ZGSg_cqtMwPVy"
         self.supabase = create_client(self.url, self.key)
 
-    def get_image_list(self, bucket_name="image"):
-        """Storage 버킷에 있는 파일 목록을 가져옵니다."""
-        return self.supabase.storage.from_(bucket_name).list()
+    def get_image_list(self, bucket_name="images"):
+        """Storage 버킷의 전체 파일 목록을 페이지 단위로 조회합니다."""
+        all_files = []
+        offset = 0
+        limit = 100
 
-    def get_image_url(self, file_name, bucket_name="image"):
+        while True:
+            files = (
+                self.supabase.storage
+                .from_(bucket_name)
+                .list(
+                    "",
+                    {
+                        "limit": limit,
+                        "offset": offset,
+                        "sortBy": {
+                            "column": "name",
+                            "order": "asc"
+                        }
+                    }
+                )
+            )
+
+            if not files:
+                break
+
+            all_files.extend(files)
+
+            if len(files) < limit:
+                break
+
+            offset += limit
+
+        return all_files
+
+    def get_image_url(self, file_name, bucket_name="images"):
         """특정 이미지의 Public URL을 가져옵니다."""
         return self.supabase.storage.from_(bucket_name).get_public_url(file_name)
 

@@ -2,13 +2,10 @@ import os
 import json
 from collections import defaultdict
 from io import BytesIO
+from pathlib import Path
 
 from PIL import Image
-from supabase import create_client
-
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+from database import SupabaseManager
 
 OCR_ITEMS_TABLE = "ocr_raw_items"
 OCR_RAW_TABLE = "ocr_raw"
@@ -46,36 +43,50 @@ def normalize_bbox(bbox, image_width, image_height):
 
 
 def get_verified_ocr_items(supabase):
-    """검수가 완료된 OCR item만 가져온다."""
-    response = (
-        supabase.table(OCR_ITEMS_TABLE)
-        .select("id, ocr_raw_id, text, box, label")
-        .eq("verified", True)
-        .order("ocr_raw_id")
-        .order("id")
-        .execute()
-    )
+    """검수가 완료되고 label이 있는 OCR item을 전체 조회한다."""
+    all_items = []
+    start = 0
+    batch_size = 1000
 
-    return response.data
+    while True:
+        response = (
+            supabase.table(OCR_ITEMS_TABLE)
+            .select("id, ocr_raw_id, text, box, label")
+            .eq("verified", True)
+            .not_.is_("label", "null")
+            .order("ocr_raw_id")
+            .order("id")
+            .range(start, start + batch_size - 1)
+            .execute()
+        )
+
+        batch = response.data
+
+        if not batch:
+            break
+
+        all_items.extend(batch)
+
+        if len(batch) < batch_size:
+            break
+
+        start += batch_size
+
+    return all_items
 
 
 def get_ocr_raw_map(supabase):
-    """
-    ocr_raw_id와 이미지 파일을 연결한다.
-
-    현재는 ocr_raw 테이블에 id, image_path 컬럼이 있다고 가정한다.
-    실제 컬럼명이 다르면 select 부분만 수정하면 된다.
-    """
+    """ocr_raw_id와 이미지 파일명을 연결한다."""
     response = (
         supabase.table(OCR_RAW_TABLE)
-        .select("id, image_path")
+        .select("id, image_name")
         .execute()
     )
 
     return {
-        row["id"]: row["image_path"]
+        row["id"]: row["image_name"]
         for row in response.data
-        if row.get("image_path")
+        if row.get("image_name")
     }
 
 
@@ -139,12 +150,8 @@ def build_receipt_sample(ocr_raw_id, items, image_path, image):
 
 
 def create_dataset():
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        raise ValueError(
-            "환경변수 SUPABASE_URL, SUPABASE_KEY를 설정해주세요."
-        )
-
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    db = SupabaseManager()
+    supabase = db.supabase
 
     items = get_verified_ocr_items(supabase)
     grouped_items = group_items_by_receipt(items)

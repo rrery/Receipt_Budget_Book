@@ -103,7 +103,7 @@ def main():
     )
 
     print("1. Supabase Storage에서 이미지 목록을 조회하는 중...")
-    images = db_manager.get_image_list(bucket_name="image")
+    images = db_manager.get_image_list(bucket_name="images")
     
     if not images:
         print("버킷에 이미지 파일이 없습니다. Supabase에 이미지를 먼저 업로드해 주세요.")
@@ -113,10 +113,15 @@ def main():
 
     # 테스트를 위해 스토리지의  다섯 번째 이미지까지 선택
     for idx, img_info in enumerate(images, start=1):
-        if idx > 2:
-            break
         target_image = img_info['name']
-        
+
+        #if db_manager.is_image_processed(target_image):
+        #    print(f"[건너뜀] {target_image} (이미 처리됨)")
+        #    continue
+
+        if idx <= 138:
+            continue
+
         # .emptyFolderPlaceholder 같은 시스템 특수 파일은 건너넙니다.
         if target_image.startswith('.'):
             continue
@@ -125,7 +130,7 @@ def main():
 
     
         # 2. 이미지의 Public URL 가져오기
-        image_url = db_manager.get_image_url(target_image, bucket_name="image")
+        image_url = db_manager.get_image_url(target_image, bucket_name="images")
         print(f"이미지 URL: {image_url}")
     
         # 3. PaddleOCR은 인터넷 주소(URL)를 바로 읽지 못하므로, 로컬에 임시 다운로드

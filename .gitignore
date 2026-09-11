@@ -224,3 +224,5 @@ temp_receipt.jpg
 
 # 환경변수 (API 키 등)
 .env
+
+data/
