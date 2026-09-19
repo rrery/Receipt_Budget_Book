@@ -1,0 +1,7 @@
+torch
+transformers
+safetensors
+scikit-learn
+supabase
+Pillow
+numpy
