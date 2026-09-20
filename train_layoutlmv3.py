@@ -1,18 +1,16 @@
 import json
 from pathlib import Path
 from transformers import AutoProcessor
-
-from io import BytesIO
-
 from PIL import Image
 
-from database import SupabaseManager
 
 MODEL_NAME = "microsoft/layoutlmv3-base"
 
 TRAIN_PATH = Path("data/layoutlm/train.json")
 VAL_PATH = Path("data/layoutlm/validation.json")
 TEST_PATH = Path("data/layoutlm/test.json")
+
+IMAGE_DIR = Path("receipt")
 
 LABEL_LIST = [
     "O",
@@ -77,19 +75,6 @@ def load_processor():
 
     return processor
 
-def download_image(supabase, image_path):
-    """
-    Supabase Storage의 images 버킷에서 영수증 이미지를 다운로드하고
-    PIL Image 객체로 변환한다.
-    """
-    image_bytes = (
-        supabase.storage
-        .from_("images")
-        .download(image_path)
-    )
-
-    return Image.open(BytesIO(image_bytes)).convert("RGB")
-
 def convert_labels_to_ids(labels):
     """
     Dataset의 문자열 BIO label을
@@ -97,7 +82,19 @@ def convert_labels_to_ids(labels):
     """
     return [label2id[label] for label in labels]
 
+def load_local_image(image_path):
+    """
+    프로젝트의 receipt 폴더에서 영수증 이미지를 불러와
+    PIL RGB 이미지로 반환한다.
+    """
+    full_path = IMAGE_DIR / image_path
 
+    if not full_path.exists():
+        raise FileNotFoundError(
+            f"이미지를 찾을 수 없습니다: {full_path}"
+        )
+
+    return Image.open(full_path).convert("RGB")
 
 if __name__ == "__main__":
     print(f"Label 수: {len(LABEL_LIST)}")
@@ -115,14 +112,9 @@ if __name__ == "__main__":
 
     print("LayoutLMv3 Processor 로드 완료")
 
-    # 여기부터 추가
-    db = SupabaseManager()
-    supabase = db.supabase
-
     sample = train_data[0]
 
-    image = download_image(
-        supabase,
+    image = load_local_image(
         sample["image_path"]
     )
 

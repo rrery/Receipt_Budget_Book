@@ -70,10 +70,35 @@ def save_split_dataset(data, output_path):
             indent=2,
         )
 
+def filter_dataset_by_id_range(dataset, start_id, end_id):
+    """
+    전체 Dataset에서 지정한 ocr_raw_id 범위에 해당하는
+    영수증 sample만 선택한다.
+
+    현재 로컬에 이미지가 준비된 영수증만
+    학습에 사용하기 위해 사용한다.
+    """
+    filtered_dataset = [
+        sample
+        for sample in dataset
+        if start_id <= sample["ocr_raw_id"] <= end_id
+    ]
+
+    return filtered_dataset
+
 if __name__ == "__main__":
     dataset = load_dataset()
 
     print(f"전체 Dataset: {len(dataset)}개")
+
+    # 현재 로컬에 이미지가 준비된 영수증만 학습 대상으로 선택
+    dataset = filter_dataset_by_id_range(
+        dataset,
+        start_id=112,
+        end_id=171
+    )
+
+    print(f"현재 학습 대상 Dataset: {len(dataset)}개")
 
     dataset = shuffle_dataset(dataset)
 
