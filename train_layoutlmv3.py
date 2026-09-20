@@ -1,8 +1,10 @@
 import json
 from pathlib import Path
-from transformers import AutoProcessor
 from PIL import Image
+from torch.utils.data import Dataset
 
+import torch
+from transformers import AutoProcessor, AutoModelForTokenClassification
 
 MODEL_NAME = "microsoft/layoutlmv3-base"
 
@@ -75,6 +77,22 @@ def load_processor():
 
     return processor
 
+def load_model():
+    """
+    사전학습된 LayoutLMv3 모델을 Token Classification 용도로 불러온다.
+
+    영수증 OCR token을 BIO label로 분류할 수 있도록
+    프로젝트의 label 개수와 label-ID 매핑 정보를 설정한다.
+    """
+    model = AutoModelForTokenClassification.from_pretrained(
+        MODEL_NAME,
+        num_labels=len(LABEL_LIST),
+        id2label=id2label,
+        label2id=label2id,
+    )
+
+    return model
+
 def convert_labels_to_ids(labels):
     """
     Dataset의 문자열 BIO label을
@@ -96,6 +114,48 @@ def load_local_image(image_path):
 
     return Image.open(full_path).convert("RGB")
 
+class ReceiptDataset(Dataset):
+    """
+    영수증 sample 목록을 PyTorch Dataset 형태로 변환한다.
+
+    각 sample의 이미지, OCR text, bbox, label을 불러와
+    LayoutLMv3 Processor를 통해 모델 입력 Tensor로 변환한다.
+    """
+
+    def __init__(self, samples, processor):
+        self.samples = samples
+        self.processor = processor
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, index):
+        sample = self.samples[index]
+
+        image = load_local_image(
+            sample["image_path"]
+        )
+
+        word_labels = convert_labels_to_ids(
+            sample["labels"]
+        )
+
+        encoding = self.processor(
+            image,
+            sample["words"],
+            boxes=sample["boxes"],
+            word_labels=word_labels,
+            truncation=True,
+            padding="max_length",
+            max_length=512,
+            return_tensors="pt",
+        )
+
+        return {
+            key: value.squeeze(0)
+            for key, value in encoding.items()
+        }
+
 if __name__ == "__main__":
     print(f"Label 수: {len(LABEL_LIST)}")
     print(label2id)
@@ -112,27 +172,87 @@ if __name__ == "__main__":
 
     print("LayoutLMv3 Processor 로드 완료")
 
-    sample = train_data[0]
-
-    image = load_local_image(
-        sample["image_path"]
+    train_dataset = ReceiptDataset(
+        train_data,
+        processor
     )
 
-    word_labels = convert_labels_to_ids(
-        sample["labels"]
+    val_dataset = ReceiptDataset(
+        val_data,
+        processor
     )
 
-    encoding = processor(
-        image,
-        sample["words"],
-        boxes=sample["boxes"],
-        word_labels=word_labels,
-        truncation=True,
-        padding="max_length",
-        max_length=512,
-        return_tensors="pt",
+    test_dataset = ReceiptDataset(
+        test_data,
+        processor
     )
 
-    print("\nProcessor 출력:")
-    for key, value in encoding.items():
+    print(f"\nPyTorch Train Dataset: {len(train_dataset)}개")
+    print(f"PyTorch Validation Dataset: {len(val_dataset)}개")
+    print(f"PyTorch Test Dataset: {len(test_dataset)}개")
+
+    sample_encoding = train_dataset[0]
+
+    print("\nTrain Dataset 첫 sample:")
+    for key, value in sample_encoding.items():
         print(key, value.shape)
+
+        # 사전학습된 LayoutLMv3 모델을 불러온다.
+    model = load_model()
+
+    print("\nLayoutLMv3 모델 로드 완료")
+
+    # Dataset에서 가져온 단일 sample에 batch 차원을 추가한다.
+    batch = {
+        key: value.unsqueeze(0)
+        for key, value in sample_encoding.items()
+    }
+
+    # 실제 학습은 하지 않고 Forward만 실행하여
+    # 모델 출력과 Loss가 정상적으로 계산되는지 확인한다.
+    with torch.no_grad():
+        outputs = model(**batch)
+
+    print(f"Logits shape: {outputs.logits.shape}")
+    print(f"Loss: {outputs.loss.item()}")
+
+    # 실제 학습이 가능하도록 모델을 학습 모드로 전환한다.
+    model.train()
+
+    # 모델의 weight를 업데이트할 optimizer를 생성한다.
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=5e-5
+    )
+
+    print("\n간단한 학습 Loop 시작")
+
+    for step in range(3):
+        # Train Dataset에서 sample 하나를 가져온다.
+        sample_encoding = train_dataset[step]
+
+        # 모델 입력을 위해 batch 차원을 추가한다.
+        batch = {
+            key: value.unsqueeze(0)
+            for key, value in sample_encoding.items()
+        }
+
+        # 이전 step에서 계산된 gradient를 초기화한다.
+        optimizer.zero_grad()
+
+        # Forward
+        outputs = model(**batch)
+
+        # 현재 예측과 정답 사이의 Loss
+        loss = outputs.loss
+
+        # Backward
+        loss.backward()
+
+        # 계산된 gradient를 이용해 모델 weight 수정
+        optimizer.step()
+
+        print(
+            f"Step {step + 1} | "
+            f"Loss: {loss.item():.4f}"
+        )
