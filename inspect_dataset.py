@@ -1,150 +1,79 @@
+"""정규화 bbox와 BIO 라벨을 이미지 위에 표시하여 눈으로 검사한다."""
+
+import argparse
 import json
-from pathlib import Path
 from io import BytesIO
+from pathlib import Path
 
 from PIL import Image, ImageDraw
 
 from database import SupabaseManager
 
-DATASET_PATH = Path("data/layoutlm/dataset.json")
+DEFAULT_DATASET = Path("data/layoutlm/dataset.json")
 
 
-def load_dataset():
-    """
-    생성된 dataset.json 파일을 읽어서
-    영수증 sample 목록을 반환한다.
-    """
-    with DATASET_PATH.open("r", encoding="utf-8") as file:
-        dataset = json.load(file)
-
-    return dataset
+def load_dataset(path: Path) -> list[dict]:
+    with path.open("r", encoding="utf-8") as file:
+        return json.load(file)
 
 
-def get_sample_by_id(dataset, ocr_raw_id):
-    """
-    Dataset에서 특정 ocr_raw_id를 가진
-    영수증 sample 하나를 찾아 반환한다.
-    """
-    for sample in dataset:
-        if sample["ocr_raw_id"] == ocr_raw_id:
-            return sample
-
-    return None
-
-def download_image(supabase, image_path):
-    """
-    Supabase Storage의 images 버킷에서 영수증 이미지를 다운로드하고
-    PIL Image 객체로 변환한다.
-    """
-    image_bytes = (
-        supabase.storage
-        .from_("images")
-        .download(image_path)
+def get_sample_by_id(dataset: list[dict], ocr_raw_id: int) -> dict | None:
+    return next(
+        (sample for sample in dataset if sample["ocr_raw_id"] == ocr_raw_id),
+        None,
     )
 
+
+def download_image(supabase, image_path: str, bucket: str) -> Image.Image:
+    image_bytes = supabase.storage.from_(bucket).download(image_path)
     return Image.open(BytesIO(image_bytes)).convert("RGB")
 
-def denormalize_bbox(box, image_width, image_height):
-    """
-    LayoutLM용 0~1000 범위의 bbox를
-    실제 이미지의 픽셀 좌표로 변환한다.
 
-    입력:
-        box = [x_min, y_min, x_max, y_max]
-
-    출력:
-        실제 이미지 크기에 대응하는 픽셀 좌표
-    """
-    x_min, y_min, x_max, y_max = box
-
+def denormalize_bbox(box: list[int], width: int, height: int) -> list[int]:
+    x0, y0, x1, y1 = box
     return [
-        int(x_min * image_width / 1000),
-        int(y_min * image_height / 1000),
-        int(x_max * image_width / 1000),
-        int(y_max * image_height / 1000),
+        int(x0 * width / 1000),
+        int(y0 * height / 1000),
+        int(x1 * width / 1000),
+        int(y1 * height / 1000),
     ]
 
-def draw_labeled_boxes(image, sample):
-    """
-    Dataset의 bbox를 실제 이미지 좌표로 복원한 뒤,
-    O가 아닌 학습 대상 token의 bbox와 label을 이미지 위에 표시한다.
-    """
+
+def draw_labeled_boxes(image: Image.Image, sample: dict) -> Image.Image:
     draw = ImageDraw.Draw(image)
-
-    image_width, image_height = image.size
-
-    for word, box, label in zip(
-        sample["words"],
-        sample["boxes"],
-        sample["labels"]
-    ):
+    width, height = image.size
+    for box, label in zip(sample["boxes"], sample["labels"]):
         if label == "O":
             continue
-
-        original_box = denormalize_bbox(
-            box,
-            image_width,
-            image_height
-        )
-
-        draw.rectangle(
-            original_box,
-            outline="red",
-            width=2
-        )
-
-        draw.text(
-            (original_box[0], original_box[1]),
-            label,
-            fill="red"
-        )
-
+        original_box = denormalize_bbox(box, width, height)
+        draw.rectangle(original_box, outline="red", width=2)
+        draw.text((original_box[0], original_box[1]), label, fill="red")
     return image
 
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Dataset bbox/라벨 시각 검사")
+    parser.add_argument("ocr_raw_id", type=int)
+    parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
+    parser.add_argument("--bucket", default="images")
+    parser.add_argument("--output", type=Path, default=None)
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    dataset = load_dataset()
+    args = parse_args()
+    samples = load_dataset(args.dataset)
+    sample = get_sample_by_id(samples, args.ocr_raw_id)
+    if sample is None:
+        raise SystemExit(f"ocr_raw_id={args.ocr_raw_id}를 찾을 수 없습니다.")
 
-    sample = get_sample_by_id(dataset, 15)
+    db = SupabaseManager()
+    source_image = download_image(db.supabase, sample["image_path"], args.bucket)
+    inspected = draw_labeled_boxes(source_image.copy(), sample)
+    output_path = args.output or Path("outputs/inspection") / f"receipt_{args.ocr_raw_id}.jpg"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    inspected.save(output_path, quality=90)
 
-    if sample:
-        print(f"ocr_raw_id: {sample['ocr_raw_id']}")
-        print(f"image_path: {sample['image_path']}")
-        print(f"token 수: {len(sample['words'])}")
-
-        db = SupabaseManager()
-        supabase = db.supabase
-
-        image = download_image(
-            supabase,
-            sample["image_path"]
-        )
-
-        print(f"이미지 크기: {image.size}")
-
-        image_width, image_height = image.size
-
-        for index in range(min(3, len(sample["boxes"]))):
-            normalized_box = sample["boxes"][index]
-
-            original_box = denormalize_bbox(
-                normalized_box,
-                image_width,
-                image_height
-            )
-
-            print(
-                f"{index}: "
-                f"{sample['words'][index]} / "
-                f"{sample['labels'][index]} / "
-                f"{normalized_box} -> {original_box}"
-            )
-
-        inspected_image = draw_labeled_boxes(
-            image.copy(),
-            sample
-        )
-
-        inspected_image.show()
-
-    else:
-        print("해당 ocr_raw_id를 찾을 수 없습니다.")
+    print(f"ocr_raw_id: {sample['ocr_raw_id']}")
+    print(f"OCR token 수: {len(sample['words'])}")
+    print(f"라벨 표시 이미지: {output_path}")

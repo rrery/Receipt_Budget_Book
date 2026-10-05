@@ -1,10 +1,19 @@
+import os
+
 from supabase import create_client
 
 class SupabaseManager:
     def __init__(self):
-        # 1. Supabase 연동 정보
-        self.url = "https://djjkvygcgcmmaowbnxjq.supabase.co"
-        self.key = "sb_publishable_ZX9Jjwq6LNFYMAlfu5ZGSg_cqtMwPVy"
+        # 팀원이 별도 설정 없이 실행할 수 있도록 현재 publishable 값을 기본값으로
+        # 두되, 배포 환경에서는 환경변수로 교체할 수 있게 한다.
+        self.url = os.getenv(
+            "SUPABASE_URL",
+            "https://djjkvygcgcmmaowbnxjq.supabase.co",
+        )
+        self.key = os.getenv(
+            "SUPABASE_KEY",
+            "sb_publishable_ZX9Jjwq6LNFYMAlfu5ZGSg_cqtMwPVy",
+        )
         self.supabase = create_client(self.url, self.key)
 
     def get_image_list(self, bucket_name="images"):
@@ -76,6 +85,17 @@ class SupabaseManager:
 
     def get_ocr_raw(self, ocr_raw_id: int):
         return self.supabase.table("ocr_raw").select("*").eq("id", ocr_raw_id).single().execute()
+
+    def is_image_processed(self, image_name: str) -> bool:
+        """같은 이미지가 이미 OCR 처리되어 DB에 들어갔는지 확인합니다."""
+        result = (
+            self.supabase.table("ocr_raw")
+            .select("id")
+            .eq("image_name", image_name)
+            .limit(1)
+            .execute()
+        )
+        return bool(result.data)
     
     def insert_receipt(self, ocr_raw_id: int, store_name: str, purchased_at: str, total_amount: int) -> int:
         data = {

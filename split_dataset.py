@@ -1,115 +1,158 @@
+"""영수증 단위 데이터 누수 없이 Train/Validation/Test를 균형 분할한다."""
+
+import argparse
 import json
 import random
+from collections import Counter
 from pathlib import Path
+from typing import Any
+
+DEFAULT_DATASET = Path("data/layoutlm/dataset.json")
+DEFAULT_OUTPUT_DIR = Path("data/layoutlm")
 
 
-DATASET_PATH = Path("data/layoutlm/dataset.json")
-
-RANDOM_SEED = 42
-
-TRAIN_PATH = Path("data/layoutlm/train.json")
-VAL_PATH = Path("data/layoutlm/validation.json")
-TEST_PATH = Path("data/layoutlm/test.json")
-
-def load_dataset():
-    """
-    전체 영수증 Dataset을 JSON 파일에서 읽어온다.
-    각 원소는 영수증 한 장에 해당하는 sample이다.
-    """
-    with DATASET_PATH.open("r", encoding="utf-8") as file:
-        dataset = json.load(file)
-
-    return dataset
+def load_dataset(path: Path) -> list[dict]:
+    with path.open("r", encoding="utf-8") as file:
+        return json.load(file)
 
 
-def shuffle_dataset(dataset):
-    """
-    영수증 sample의 순서를 무작위로 섞는다.
+def entity_set(sample: dict) -> set[str]:
+    """층화 계산에 사용할 entity 종류. 과다한 O 라벨은 제외한다."""
+    return {
+        label.split("-", 1)[1]
+        for label in sample["labels"]
+        if label != "O" and "-" in label
+    }
 
-    RANDOM_SEED를 고정하여 코드를 다시 실행해도
-    동일한 Train / Validation / Test 분할 결과를 얻도록 한다.
-    """
-    shuffled_dataset = dataset.copy()
 
-    random.seed(RANDOM_SEED)
-    random.shuffle(shuffled_dataset)
+def balanced_split(
+    dataset: list[dict], train_ratio: float, val_ratio: float, seed: int
+) -> dict[str, list[dict]]:
+    """희소 entity를 먼저 배치하는 결정적 multilabel 균형 분할."""
+    if not dataset:
+        raise ValueError("Dataset이 비어 있습니다.")
+    if train_ratio <= 0 or val_ratio <= 0 or train_ratio + val_ratio >= 1:
+        raise ValueError("train/validation 비율과 남은 test 비율은 모두 0보다 커야 합니다.")
 
-    return shuffled_dataset
+    total = len(dataset)
+    train_size = int(total * train_ratio)
+    val_size = int(total * val_ratio)
+    target_sizes = {
+        "train": train_size,
+        "validation": val_size,
+        "test": total - train_size - val_size,
+    }
+    total_entities = Counter(entity for sample in dataset for entity in entity_set(sample))
+    target_entities = {
+        name: {
+            entity: count * size / total
+            for entity, count in total_entities.items()
+        }
+        for name, size in target_sizes.items()
+    }
 
-def split_dataset(dataset, train_ratio=0.8, val_ratio=0.1):
-    """
-    영수증 단위 Dataset을 Train / Validation / Test로 분리한다.
-
-    train_ratio와 val_ratio를 기준으로 Train과 Validation 크기를 정하고,
-    나머지 sample은 Test에 배정한다.
-    """
-    total_count = len(dataset)
-
-    train_count = int(total_count * train_ratio)
-    val_count = int(total_count * val_ratio)
-
-    train_data = dataset[:train_count]
-    val_data = dataset[train_count:train_count + val_count]
-    test_data = dataset[train_count + val_count:]
-
-    return train_data, val_data, test_data
-
-def save_split_dataset(data, output_path):
-    """
-    분리된 Dataset을 JSON 파일로 저장한다.
-
-    output_path의 상위 폴더가 없으면 자동으로 생성한다.
-    """
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with output_path.open("w", encoding="utf-8") as file:
-        json.dump(
-            data,
-            file,
-            ensure_ascii=False,
-            indent=2,
-        )
-
-def filter_dataset_by_id_range(dataset, start_id, end_id):
-    """
-    전체 Dataset에서 지정한 ocr_raw_id 범위에 해당하는
-    영수증 sample만 선택한다.
-
-    현재 로컬에 이미지가 준비된 영수증만
-    학습에 사용하기 위해 사용한다.
-    """
-    filtered_dataset = [
-        sample
-        for sample in dataset
-        if start_id <= sample["ocr_raw_id"] <= end_id
-    ]
-
-    return filtered_dataset
-
-if __name__ == "__main__":
-    dataset = load_dataset()
-
-    print(f"전체 Dataset: {len(dataset)}개")
-
-    # 현재 로컬에 이미지가 준비된 영수증만 학습 대상으로 선택
-    dataset = filter_dataset_by_id_range(
-        dataset,
-        start_id=112,
-        end_id=171
+    rng = random.Random(seed)
+    ordered = list(dataset)
+    rng.shuffle(ordered)
+    ordered.sort(
+        key=lambda sample: (
+            sum(1.0 / total_entities[entity] for entity in entity_set(sample)),
+            len(entity_set(sample)),
+        ),
+        reverse=True,
     )
 
-    print(f"현재 학습 대상 Dataset: {len(dataset)}개")
+    result: dict[str, list[dict]] = {name: [] for name in target_sizes}
+    entity_counts = {name: Counter() for name in target_sizes}
 
-    dataset = shuffle_dataset(dataset)
+    for sample in ordered:
+        entities = entity_set(sample)
+        candidates = [
+            name for name in target_sizes if len(result[name]) < target_sizes[name]
+        ]
 
-    train_data, val_data, test_data = split_dataset(dataset)
+        def placement_cost(name: str) -> tuple[float, float, str]:
+            entity_cost = 0.0
+            for entity in entities:
+                current = entity_counts[name][entity]
+                target = target_entities[name][entity]
+                entity_cost += (current + 1 - target) ** 2 - (current - target) ** 2
+            size_fill = len(result[name]) / max(1, target_sizes[name])
+            return entity_cost, size_fill, name
 
-    print(f"Train: {len(train_data)}개")
-    print(f"Validation: {len(val_data)}개")
-    print(f"Test: {len(test_data)}개")
+        selected = min(candidates, key=placement_cost)
+        result[selected].append(sample)
+        entity_counts[selected].update(entities)
 
-    save_split_dataset(train_data, TRAIN_PATH)
-    save_split_dataset(val_data, VAL_PATH)
-    save_split_dataset(test_data, TEST_PATH)
+    return result
 
-    print("Train / Validation / Test 저장 완료")
+
+def write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as file:
+        json.dump(value, file, ensure_ascii=False, separators=(",", ":"))
+
+
+def validate_split(dataset: list[dict], splits: dict[str, list[dict]]) -> None:
+    all_ids = [sample["ocr_raw_id"] for sample in dataset]
+    split_ids = {
+        name: {sample["ocr_raw_id"] for sample in samples}
+        for name, samples in splits.items()
+    }
+    if len(all_ids) != len(set(all_ids)):
+        raise ValueError("원본 Dataset에 중복 ocr_raw_id가 있습니다.")
+    if split_ids["train"] & split_ids["validation"]:
+        raise RuntimeError("Train/Validation 데이터 누수가 있습니다.")
+    if split_ids["train"] & split_ids["test"]:
+        raise RuntimeError("Train/Test 데이터 누수가 있습니다.")
+    if split_ids["validation"] & split_ids["test"]:
+        raise RuntimeError("Validation/Test 데이터 누수가 있습니다.")
+    if set(all_ids) != set().union(*split_ids.values()):
+        raise RuntimeError("분할 과정에서 영수증이 누락됐습니다.")
+
+
+def summarize(splits: dict[str, list[dict]]) -> dict:
+    manifest: dict[str, Any] = {}
+    print("\n===== Dataset 분할 =====")
+    for name, samples in splits.items():
+        counts = Counter(entity for sample in samples for entity in entity_set(sample))
+        manifest[name] = {
+            "receipt_count": len(samples),
+            "receipt_ids": [sample["ocr_raw_id"] for sample in samples],
+            "entity_receipt_counts": dict(sorted(counts.items())),
+        }
+        entity_text = ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))
+        print(f"{name:<10}: {len(samples):>3}장 | {entity_text}")
+    return manifest
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="LayoutLMv3 Dataset 균형 분할")
+    parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--train-ratio", type=float, default=0.8)
+    parser.add_argument("--validation-ratio", type=float, default=0.1)
+    parser.add_argument("--seed", type=int, default=42)
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    samples = load_dataset(args.dataset)
+    split_result = balanced_split(
+        samples, args.train_ratio, args.validation_ratio, args.seed
+    )
+    validate_split(samples, split_result)
+    manifest = summarize(split_result)
+
+    write_json(args.output_dir / "train.json", split_result["train"])
+    write_json(args.output_dir / "validation.json", split_result["validation"])
+    write_json(args.output_dir / "test.json", split_result["test"])
+    write_json(args.output_dir / "split_manifest.json", {
+        "seed": args.seed,
+        "train_ratio": args.train_ratio,
+        "validation_ratio": args.validation_ratio,
+        "test_ratio": 1 - args.train_ratio - args.validation_ratio,
+        "splits": manifest,
+    })
+    print("=========================\n분할 파일 저장 완료")
