@@ -30,3 +30,10 @@
 ## 후속 원격 연결
 
 사용자가 지정한 `minsoo9810-sys/Receipt_Budget_Book`을 origin으로 연결했습니다. 원격 master의 기존 이력을 로컬 master의 부모 이력으로 복원하고 스테이징 소스를 유지했습니다. 위 초기 준비 단계의 미연결 상태와 달라졌습니다. 강제 push 없이 기존 master에 후속 커밋을 추가합니다. 원본 fork 저장소는 `rrery/Receipt_Budget_Book`입니다.
+
+## 업로드 검증 완료
+
+- 서비스 구현 커밋 `967c249`를 origin/master에 push했습니다. 원격 조회에서도 같은 커밋을 확인했습니다.
+- 회귀 테스트를 다시 실행해 21개 통과, Starlette/httpx 사용 중단 예정 안내 1건을 확인했습니다.
+- 팀장님 저장소 주소를 확인 중이며 PR은 아직 생성하지 않았습니다. 원본 fork의 기본 브랜치는 main입니다.
+- PR 제출 설명은 [PULL_REQUEST_DRAFT.md](PULL_REQUEST_DRAFT.md)에 준비했습니다.
