@@ -1,163 +1,87 @@
-# Receipt Budget Book — LayoutLMv3 최소 부분 파인튜닝
+# 차곡 · 나다운 소비 기록
 
-## 1. 전체 흐름
+영수증 사진을 올리면 자동으로 소비 달력에 기록하는 가계부입니다. 기존 `Receipt_Budget_Book`의 한국어 OCR·규칙 파서·학습 모델을 그대로 재사용합니다.
 
-```text
-영수증 이미지 업로드
-  → main.py / ysz_ocr.py: PaddleOCR 실행 및 Supabase 저장
-  → 사람이 ocr_raw_items.label 검수
-  → create_dataset.py: 검수된 Supabase 행을 Dataset JSON으로 변환
-  → validate_dataset.py: 구조·bbox·BIO 라벨 검사
-  → split_dataset.py: Train / Validation / Test 분리
-  → train_layoutlmv3.py: 동결 특징 추출 + Linear head 5-Fold 학습
-  → predict_layoutlmv3.py: 새 ocr_raw_id의 BIO entity 예측
+## 바로 실행
+
+**`start.cmd` 더블클릭** 또는 프로젝트 폴더에서 아래 명령을 실행하세요.
+
+```powershell
+.\.venv\Scripts\python.exe tools/serve.py
 ```
 
-## 2. 이번 학습 방식
+화면: **http://127.0.0.1:8000** · 로컬 API 테스트: **http://127.0.0.1:8000/docs**
 
-- `microsoft/layoutlmv3-base` backbone은 전부 동결합니다.
-- backbone의 문서 특징은 처음 한 번만 계산하고 CPU RAM에 보관합니다.
-- 학습되는 것은 `768 → 17 labels` 단일 Linear 출력층뿐입니다.
-- 실제 학습 파라미터는 약 13,073개입니다.
-- Train+Validation을 합친 개발 데이터에서 `StratifiedGroupKFold(5)`를 수행합니다.
-- 층화 계산에서 과다한 `O` 라벨은 제외합니다.
-- Test는 5-Fold와 최종 epoch 선정에 사용하지 않고 마지막 한 번만 평가합니다.
-- Fold별 모델은 저장하지 않고 평가 JSON만 남깁니다.
-- 최종 결과는 작은 `linear_head.safetensors` 하나만 저장합니다.
+이미 실행 중이면 주소만 열면 됩니다. 예전 화면이 보이면 브라우저에서 강력 새로고침(Ctrl+Shift+R)을 해주세요. 로컬 모드는 이 컴퓨터의 기존 기록을 보여줍니다. 공개 배포 모드는 로그인한 사람마다 기록을 분리합니다.
 
-이 방식은 Full fine-tuning보다 학습 용량과 GPU 메모리가 훨씬 작지만, 데이터에
-따라 최고 성능은 낮을 수 있습니다. 먼저 최소 Linear head 결과를 기준선으로
-사용하고, 부족할 때만 상위 encoder 일부를 여는 것이 권장 순서입니다.
+## 달력 사용하기
 
-## 3. 파일 역할
+1. 맨 위 **영수증 업로드**로 사진을 올립니다. 한 번에 20장, 사진당 12MB까지 지원합니다.
+2. 사진은 오늘 날짜에 분석 중으로 바로 표시됩니다. 구매 날짜와 금액을 읽으면 자동으로 해당 날짜의 합계에 반영합니다. **검토를 먼저 할 필요가 없습니다.**
+3. 날짜를 읽지 못하면 업로드 날짜에 임시 표시하고, 금액은 미확인으로 남깁니다. 금액 미확인 기록은 합계에 더하지 않습니다.
+4. 필요할 때 날짜를 누르고 **살펴보기**에서 상호명·날짜·분류·품목·금액을 수정하세요. 살펴본 기록으로 표시해도 합계가 중복으로 더해지지 않습니다.
+5. **직접 기록**으로 수기 입력도 가능합니다. 영수증과 월간 메모는 각각 200자까지 저장합니다.
+6. 달력 아래에서 지출 합계, 기록 수, 살펴본 수, 주요 분류, 가장 지출이 컸던 날과 지난달 비교를 확인합니다. 분류는 초기 키워드 규칙으로 제안하며 언제든 바꿀 수 있습니다.
+7. **샘플 20장 체험**은 현재 월에 총 20건을 준비합니다. 여러 번 눌러도 중복되지 않습니다. 샘플은 목록에서 표시하며 통계와 저장 카드에 포함된 사실도 안내합니다.
+8. **이번 달 저장하기**에서 JPEG로 저장하거나 **PDF / 인쇄**를 누르세요. PDF는 열린 인쇄 화면에서 브라우저의 ‘PDF로 저장’을 선택합니다. 지원하는 모바일에서는 파일 공유도 가능합니다.
 
-| 파일 | 역할 |
-|---|---|
-| `main.py` | Storage 이미지 목록을 받아 OCR→규칙 파싱→DB 저장을 실행하는 팀 입력 진입점 |
-| `database.py` | Supabase Storage와 DB 조회·삽입 기능 |
-| `ysz_ocr.py` | PaddleOCR 실행 후 text, confidence, polygon bbox 생성 |
-| `ocr_linebyline.py` | OCR 조각을 y축 기준의 행으로 묶음 |
-| `receipt_parser.py` | 행 단위 OCR을 규칙 기반으로 상호명·날짜·품목·합계금액으로 파싱 |
-| `item_y.py` | 품목 영역을 y축 행 기준으로 분석하는 보조/대안 파서 |
-| `create_dataset.py` | `verified=True`이고 label이 있는 Supabase 행을 영수증 단위 Dataset으로 생성 |
-| `validate_dataset.py` | 중복 ID, list 길이, bbox 범위, 빈 text, 허용 라벨 검사 |
-| `inspect_dataset.py` | 정규화 bbox와 entity 라벨을 이미지 위에 그려 시각 검사 |
-| `split_dataset.py` | O를 제외한 entity 분포를 고려해 Train/Validation/Test로 분리 |
-| `train_layoutlmv3.py` | 최소 Linear head의 5-Fold, early stopping, 최종 학습 및 Test 평가 |
-| `predict_layoutlmv3.py` | 최종 head를 불러와 Supabase `ocr_raw_id`의 BIO 라벨과 entity 후보를 출력 |
-| `layoutlmv3_labels.py` | 모든 단계에서 공유하는 라벨 및 과거 라벨 별칭 정의 |
+저장 카드에는 상호명·영수증 사진을 넣지 않습니다. 월간 메모는 기본 제외하며 체크했을 때만 포함합니다. 저장 화면은 로그인한 본인만 열 수 있고 공개 공유 링크를 생성하지 않습니다.
 
-## 4. 설치
+## 수정 내용을 학습에 활용하기
 
-학습 환경에서는 다음 명령을 실행합니다.
+기록의 인식 필드를 수정하면 전후 값, 원래 OCR 좌표·텍스트, 예측 결과를 별도 `corrections` 테이블에 보관합니다. **영수증·월 메모는 학습 후보에서 제외합니다.** 화면의 선택 동의가 있는 기록만 운영자가 아래 명령으로 내보낼 수 있습니다.
 
-```bash
-python -m pip install -r requirements-training.txt
+```powershell
+.\.venv\Scripts\python.exe tools/export_corrections.py
 ```
 
-OCR 입력 파이프라인은 PaddleOCR와 OpenCV도 별도로 필요합니다.
+출력: `runtime/training_candidates/날짜/`의 `candidates.jsonl`, 이미지, manifest. 날짜·상호명 등을 바꾼 기록은 필드 정정 자료이며 즉시 BIO 학습 정답이 되지는 않습니다. 사람이 OCR 토큰과 정답을 정렬·검수한 후 기존 학습 파이프라인에 넣어야 합니다. 사용자가 영수증을 지우면 연결된 정정 이력도 지워지고, 동의를 철회하면 새로운 내보내기에서 제외됩니다. 이미 내보낸 사본의 정리·기학습 모델에 관한 정책은 운영 단계에서 별도로 관리해야 합니다.
 
-## 5. 데이터 준비
+## 실제 모델 학습
 
-```bash
-python create_dataset.py
-python validate_dataset.py
-python split_dataset.py
+```powershell
+.\.venv\Scripts\python.exe tools/train.py
+# 모든 fold와 최종 가중치를 다시 학습
+.\.venv\Scripts\python.exe tools/train.py --retrain
+# Supabase 자료를 다시 읽고 재학습
+.\.venv\Scripts\python.exe tools/train.py --refresh-data
 ```
 
-시각 검사는 특정 영수증 ID를 지정합니다.
+기존 데이터 생성→검증→분할→동결 LayoutLMv3 + Linear head 학습을 실행합니다. 이미지 원본은 `.cache/receipt-images`에 캐시합니다. 같은 Storage 경로의 이미지 자체를 교체한 경우 캐시도 갱신해야 합니다. 학습 상태와 로그는 `runtime/training_status.json`, `runtime/training.log`에 남습니다. 고객 메인 화면에는 학습 내용을 표시하지 않습니다.
 
-```bash
-python inspect_dataset.py 15
+- 가중치: `Receipt_Budget_Book/outputs/layoutlmv3_linear_probe/final_model/linear_head.safetensors`
+- 설정·성능: `Receipt_Budget_Book/outputs/layoutlmv3_linear_probe/model_info.json`
+- 모델 검증 상세: [첫 구현 보고서](IMPLEMENTATION_REPORT.md)
+
+## 새 컴퓨터 준비
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-backend.txt
+.\.venv\Scripts\python.exe -m pip install -r Receipt_Budget_Book/requirements-tested.txt
+.\.venv\Scripts\python.exe -m pip install uv
+$env:UV_PYTHON_INSTALL_DIR = Join-Path (Get-Location) '.runtime'
+.\.venv\Scripts\uv.exe python install 3.12
+.\.venv\Scripts\uv.exe venv --python 3.12 .ocr-venv
+.\.venv\Scripts\uv.exe pip install --python .ocr-venv/Scripts/python.exe -r requirements-ocr.txt
 ```
 
-생성 파일:
+학습 산출물을 준비한 뒤 `tools/prepare_models.py`로 기본 모델 캐시를 받습니다. 백엔드/Torch와 PaddleOCR는 별도 환경·프로세스를 사용합니다. 다른 Supabase 학습 프로젝트를 쓰려면 환경변수 `SUPABASE_URL`, `SUPABASE_KEY`를 지정합니다. 웹 가계부는 연구용 Supabase 테이블에 쓰지 않습니다.
 
-```text
-data/layoutlm/
-├─ dataset.json
-├─ dataset_build_report.json
-├─ train.json
-├─ validation.json
-├─ test.json
-└─ split_manifest.json
+## 검사와 문서
+
+GitHub에 올리거나 팀원이 코드를 받을 때는 [Git 팀 공유 안내](GIT_TEAM_GUIDE.md)를 참고하세요.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe tools/test_live.py --fresh
 ```
 
-## 6. 5-Fold 최소 부분 파인튜닝
+첫 명령은 API·파서·저장·인증 회귀 검사입니다. 두 번째는 서버를 켠 상태에서 합성 영수증으로 실제 OCR→추론→자동 달력 기록을 검증합니다. 실소비 데이터와 구분된 검사용 기록을 남깁니다. 화면 코드 검사는 `requirements-dev.txt` 설치 후 `tools/check_frontend.py`로 실행합니다.
 
-CUDA/Colab:
+- 이번 개선: [UPGRADE_REPORT.md](UPGRADE_REPORT.md), [UPGRADE_PLAN.md](UPGRADE_PLAN.md)
+- **공개 웹 배포 준비:** [DEPLOYMENT.md](DEPLOYMENT.md), `Dockerfile`, `compose.yaml`, `.env.example`
+- 실제 자료: `runtime/budget.sqlite3`, `runtime/uploads/`. 업데이트 전 백업은 `runtime/backups/`에 있습니다.
+- 백업은 서버를 끄고 `runtime` 전체를 복사하거나 SQLite backup API로 수행합니다. 실행 중 DB 파일만 복사하면 안 됩니다.
 
-```bash
-python train_layoutlmv3.py \
-  --mixed-precision fp16 \
-  --folds 5 \
-  --epochs 30 \
-  --early-stopping-patience 5 \
-  --feature-batch-size 2 \
-  --batch-size 16
-```
-
-Intel XPU:
-
-```bash
-python train_layoutlmv3.py \
-  --mixed-precision bf16 \
-  --folds 5 \
-  --feature-batch-size 1
-```
-
-학습이 중단되면 같은 명령을 다시 실행합니다. 완료된 Fold는
-`fold_result.json`을 읽어 건너뛰며, 진행 중 Fold는 작은 `resume_state.pt`에서
-재개합니다.
-
-## 7. 최소 출력물
-
-```text
-outputs/layoutlmv3_linear_probe/
-├─ fold_manifest.json
-├─ cross_validation_summary.json
-├─ model_info.json
-├─ cv/
-│  ├─ fold_1/fold_result.json
-│  ├─ fold_2/fold_result.json
-│  ├─ fold_3/fold_result.json
-│  ├─ fold_4/fold_result.json
-│  └─ fold_5/fold_result.json
-└─ final_model/
-   ├─ linear_head.safetensors
-   └─ final_result.json
-```
-
-진행 중에만 `resume_state.pt`가 존재하며 정상 완료 후 자동 삭제됩니다. 사전학습
-LayoutLMv3 본체는 Hugging Face 캐시에서 불러오므로 출력 폴더에 복제하지 않습니다.
-
-## 8. 새 영수증 예측
-
-```bash
-python predict_layoutlmv3.py 171
-```
-
-결과는 기본적으로 다음 위치에 저장됩니다.
-
-```text
-outputs/predictions/ocr_raw_171.json
-```
-
-`entities`에는 STORE_NAME, DATE, ITEM_NAME 등의 묶인 후보가 들어가고,
-`token_predictions`에는 OCR 단어별 BIO 라벨과 confidence가 들어갑니다.
-
-## 9. 팀원의 새 이미지 입력
-
-기존 처리 이미지를 건너뛰고 새 이미지만 처리합니다.
-
-```bash
-python main.py
-```
-
-일부만 시험하려면:
-
-```bash
-python main.py --start-index 139 --limit 3
-```
-
-이미 처리된 이미지까지 다시 넣어야 할 때만 `--force`를 사용합니다.
+현재 로컬 주소는 이 컴퓨터에서만 접속됩니다. 공개 주소는 실제 서버·도메인·HTTPS 구성과 컨테이너 검증을 마친 다음 제공할 수 있습니다.

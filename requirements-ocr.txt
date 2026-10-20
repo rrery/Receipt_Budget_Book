@@ -1,0 +1,4 @@
+# Separate Python 3.12 environment; do not install into the Torch process.
+paddlepaddle==3.3.1
+paddleocr==3.7.0
+Pillow==13.0.0

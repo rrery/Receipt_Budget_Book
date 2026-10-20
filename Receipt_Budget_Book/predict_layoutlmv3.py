@@ -5,6 +5,7 @@ import json
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from functools import lru_cache
 
 import torch
 from PIL import Image
@@ -24,6 +25,20 @@ from train_layoutlmv3 import (
 def download_image(supabase: Any, image_path: str, bucket: str) -> Image.Image:
     image_bytes = supabase.storage.from_(bucket).download(image_path)
     return Image.open(BytesIO(image_bytes)).convert("RGB")
+
+
+@lru_cache(maxsize=1)
+def load_runtime(model_dir: str, mixed_precision: str, local_files_only: bool = False, version=None):
+    """웹 작업자가 같은 모델을 영수증마다 다시 로드하지 않게 한다."""
+    directory = Path(model_dir)
+    info = json.loads((directory / "model_info.json").read_text(encoding="utf-8"))
+    device = select_device("cpu")
+    precision = resolve_precision(mixed_precision, device)
+    processor = AutoProcessor.from_pretrained(info["model_name"], apply_ocr=False, local_files_only=local_files_only)
+    backbone = AutoModel.from_pretrained(info["model_name"], local_files_only=local_files_only).to(device).eval()
+    head = LinearTokenClassifier(int(info["hidden_size"]), len(info["labels"]), 0.0).to(device).eval()
+    head.load_state_dict(load_file(str(directory / "final_model" / "linear_head.safetensors")))
+    return processor, backbone, head, device, precision
 
 
 def group_entities(predictions: list[dict]) -> dict[str, list[dict]]:
@@ -68,6 +83,7 @@ def predict_ocr_raw_id(
     model_dir: Path,
     bucket: str = "images",
     mixed_precision: str = "auto",
+    db_manager=None,
 ) -> dict[str, Any]:
     info_path = model_dir / "model_info.json"
     head_path = model_dir / "final_model" / "linear_head.safetensors"
@@ -78,7 +94,7 @@ def predict_ocr_raw_id(
     with info_path.open("r", encoding="utf-8") as file:
         info = json.load(file)
 
-    db = SupabaseManager()
+    db = db_manager if db_manager is not None else SupabaseManager()
     raw_response = db.get_ocr_raw(ocr_raw_id)
     raw = raw_response.data
     item_response = db.get_ocr_items(ocr_raw_id)
@@ -110,15 +126,8 @@ def predict_ocr_raw_id(
     labels = info["labels"]
     max_length = int(info["max_length"])
     stride = int(info["stride"])
-    device = select_device()
-    precision = resolve_precision(mixed_precision, device)
-
-    processor = AutoProcessor.from_pretrained(model_name, apply_ocr=False)
-    backbone = AutoModel.from_pretrained(model_name).to(device).eval()
-    head = LinearTokenClassifier(
-        int(info["hidden_size"]), len(labels), dropout=0.0
-    ).to(device).eval()
-    head.load_state_dict(load_file(str(head_path)))
+    version = (head_path.stat().st_mtime_ns, info_path.stat().st_mtime_ns)
+    processor, backbone, head, device, precision = load_runtime(str(model_dir.resolve()), mixed_precision, db_manager is not None, version)
 
     encoding = processor(
         images=image,

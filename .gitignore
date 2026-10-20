@@ -1,19 +1,16 @@
-
-# Python 캐시
-__pycache__/
-*.py[cod]
-
-# 가상환경 및 환경변수
 .venv/
-venv/
-.env
-
-# 생성된 학습 데이터와 결과
-data/layoutlm/
-outputs/
-layoutlmv3_training_cache/
-layoutlmv3_training_output/
-
+.ocr-venv/
+.runtime/
+.cache/
+runtime/
 __pycache__/
-data/layoutlm/
-outputs/
+.pytest_cache/
+*.pyc
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+Receipt_Budget_Book/outputs/

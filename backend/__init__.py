@@ -1,0 +1,1 @@
+"""Local receipt calendar API."""

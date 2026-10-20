@@ -1,6 +1,4 @@
-"""Storage의 새 영수증을 OCR하고 파싱 결과를 Supabase에 저장한다."""
-
-import argparse
+# main.py
 import os
 import requests
 import cv2  
@@ -88,30 +86,7 @@ def auto_perspective_transform(image_path):
     print("-> [전처리] OpenCV 자동 원근 변환 완료 (스캔본 생성)")
     return True
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Supabase 영수증 OCR 입력 파이프라인")
-    parser.add_argument(
-        "--start-index",
-        type=int,
-        default=1,
-        help="Storage 정렬 목록에서 시작할 1-based 순번",
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=0,
-        help="이번 실행에서 처리할 최대 이미지 수. 0이면 제한 없음",
-    )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="이미 DB에 처리된 image_name도 다시 처리",
-    )
-    return parser.parse_args()
-
-
-def main(args=None):
-    args = args or parse_args()
+def main():
     # 1. Supabase 매니저 생성
     db_manager = SupabaseManager()
 
@@ -136,18 +111,15 @@ def main(args=None):
         
     print(f"총 {len(images)}개의 이미지를 발견했습니다. 전체 분석을 시작합니다.\n" + "="*40)
 
-    processed_count = 0
+    # 테스트를 위해 스토리지의  다섯 번째 이미지까지 선택
     for idx, img_info in enumerate(images, start=1):
         target_image = img_info['name']
 
-        if idx < args.start_index:
-            continue
+        #if db_manager.is_image_processed(target_image):
+        #    print(f"[건너뜀] {target_image} (이미 처리됨)")
+        #    continue
 
-        if args.limit > 0 and processed_count >= args.limit:
-            break
-
-        if not args.force and db_manager.is_image_processed(target_image):
-            print(f"[건너뜀] {target_image} (이미 처리됨)")
+        if idx <= 138:
             continue
 
         # .emptyFolderPlaceholder 같은 시스템 특수 파일은 건너넙니다.
@@ -164,7 +136,7 @@ def main(args=None):
         # 3. PaddleOCR은 인터넷 주소(URL)를 바로 읽지 못하므로, 로컬에 임시 다운로드
         local_temp_path = "temp_receipt.jpg"
         print("이미지 다운로드 중...")
-        response = requests.get(image_url, timeout=60)
+        response = requests.get(image_url)
         if response.status_code == 200:
             with open(local_temp_path, "wb") as f:
                 f.write(response.content)
@@ -210,7 +182,6 @@ def main(args=None):
             db_manager.insert_receipt_items(receipt_id, parsed["items"])
 
             print("🎉 모든 프로세스가 성공적으로 완료되었습니다!")
-            processed_count += 1
             
         except Exception as e:
             print(f"오류 발생: {e}")
@@ -222,4 +193,4 @@ def main(args=None):
         
 
 if __name__ == "__main__":
-    main(parse_args())
+    main()

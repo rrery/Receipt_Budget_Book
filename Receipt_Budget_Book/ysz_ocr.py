@@ -42,13 +42,17 @@ def run_ocr(image_path: str, output_path: str = DEFAULT_OUTPUT_PATH, ocr_model=N
     scores = []
 
     for page in result:
-        if "dt_polys" in page:
-            boxes.extend(page["dt_polys"])  # 추출한 박스 위치
+        if "rec_polys" in page:
+            boxes.extend(page["rec_polys"])  # 인식 필터를 통과한 텍스트와 같은 순서
+        elif "dt_polys" in page:
+            boxes.extend(page["dt_polys"])
         if "rec_texts" in page:
             texts.extend(page["rec_texts"])  # 추출한 글씨
         if "rec_scores" in page:
             scores.extend(page["rec_scores"])  # 추출한 글씨에 대한 신뢰도
 
+    if not (len(boxes) == len(texts) == len(scores)):
+        raise ValueError("OCR 인식 박스/텍스트/점수 개수가 다릅니다.")
     ocr_items = []
 
     for i, (box, text, score) in enumerate(zip(boxes, texts, scores), start=1):
