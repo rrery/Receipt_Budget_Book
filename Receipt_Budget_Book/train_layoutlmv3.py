@@ -203,14 +203,14 @@ def atomic_torch_save(value: Any, path: Path) -> None:
 
 def cpu_state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
     return {
-        key: value.detach().cpu().contiguous()
+        key: value.detach().cpu().contiguous().clone()
         for key, value in module.state_dict().items()
     }
 
 
 def download_image(supabase: Any, image_path: str, bucket: str) -> Image.Image:
-    image_bytes = supabase.storage.from_(bucket).download(image_path)
-    return Image.open(BytesIO(image_bytes)).convert("RGB")
+    from image_cache import download_image as cached_download
+    return cached_download(supabase, image_path, bucket)
 
 
 def encode_samples(
@@ -807,7 +807,9 @@ def train_final_head(
         "architecture": "frozen_layoutlmv3_linear_probe",
         "hidden_size": str(feature_data.hidden_size),
     }
-    save_file(cpu_state_dict(model), str(head_path), metadata=metadata)
+    temporary_head = head_path.with_suffix(".safetensors.tmp")
+    save_file(cpu_state_dict(model), str(temporary_head), metadata=metadata)
+    os.replace(temporary_head, head_path)
     result = {"epochs": epochs, "test": test_metrics}
     write_json(result_path, result)
     if resume_path.exists():

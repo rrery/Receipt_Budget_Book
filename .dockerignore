@@ -1,0 +1,13 @@
+.git
+.venv
+.ocr-venv
+.runtime
+.cache
+.pytest_cache
+runtime
+**/__pycache__
+**/*.pyc
+.env
+Receipt_Budget_Book/data
+Receipt_Budget_Book/outputs
+tests

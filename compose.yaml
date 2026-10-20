@@ -1,0 +1,32 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    expose: ["8000"]
+    environment:
+      APP_ENV: production
+      APP_ALLOWED_HOSTS: ${APP_DOMAIN:?Set APP_DOMAIN in .env}
+      PUBLIC_ORIGIN: https://${APP_DOMAIN}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+      MAX_RECEIPTS_PER_USER: ${MAX_RECEIPTS_PER_USER:-2000}
+    volumes:
+      - ledger_data:/data
+      - ${MODEL_DIR:-./Receipt_Budget_Book/outputs/layoutlmv3_linear_probe}:/models:ro
+    mem_limit: 4g
+  web:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+volumes:
+  ledger_data:
+  caddy_data:
+  caddy_config:

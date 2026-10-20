@@ -1,5 +1,6 @@
 import re
 import json
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 from ocr_linebyline import build_line_result
@@ -12,7 +13,7 @@ DATE_PATTERNS = [
 ]
 
 def _is_valid_date_parts(year: str, month: str, day: str) -> bool:
-    y = int(year)
+    y = int(year) + (2000 if len(year) == 2 else 0)
     m = int(month)
     d = int(day)
 
@@ -26,7 +27,11 @@ def _is_valid_date_parts(year: str, month: str, day: str) -> bool:
     if not (1 <= d <= 31):
         return False
 
-    return True
+    try:
+        date(y, m, d)
+        return True
+    except ValueError:
+        return False
 
 def _find_valid_date(text: str, patterns: List[str]) -> Optional[str]:
     # 1) 날짜 바로 뒤에 시간이 붙은 경우 띄워주기
@@ -42,7 +47,8 @@ def _find_valid_date(text: str, patterns: List[str]) -> Optional[str]:
         for match in re.finditer(pattern, normalized):
             year, month, day = match.groups()
             if _is_valid_date_parts(year, month, day):
-                return f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+                normalized_year = int(year) + (2000 if len(year) == 2 else 0)
+                return f"{normalized_year:04d}-{month.zfill(2)}-{day.zfill(2)}"
 
     return None
 
@@ -86,6 +92,10 @@ def extract_total_amount(line_result: Dict[str, Any]) -> Optional[int]:
 
         text = line["joined_text"]
 
+        # 받은 현금과 거스름돈은 지출 합계가 아니다.
+        if re.search(r"받\s*은|거\s*스\s*름|잔\s*돈", text):
+            continue
+
         # 정규식 패턴으로 키워드 검사
         if any(re.search(pattern, text) for pattern in TOTAL_KEYWORDS):
             nums = re.findall(r"\d[\d,\.]*", text)
@@ -114,6 +124,11 @@ def extract_store_name(line_result: Dict[str, Any]) -> Optional[str]:
     lines = line_result["line_result"]
     if not lines:
         return None
+
+    # 상품 표의 헤더/품목/하단 안내문이 상호명보다 길어도 상호로 선택하지 않는다.
+    header_idx, _ = find_item_header_index(line_result)
+    if header_idx is not None and header_idx > 0:
+        lines = lines[:header_idx]
 
     max_y = max(line["y_center"] for line in lines)
     # top_limit = max_y * 0.30 #일단 상호명이 어디서 나올지 모르니 top_limit은 주석 처리
@@ -267,6 +282,7 @@ def parse_item_line(line: Dict[str, Any], header_info: Dict[str, bool]) -> Optio
     elif has_price and has_qty and (not has_amount):
         if len(nums) >= 2:
             unit_price, quantity = nums[0], nums[1]
+            line_total = unit_price * quantity
         else:
             return None
 

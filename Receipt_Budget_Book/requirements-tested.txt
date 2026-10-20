@@ -1,0 +1,10 @@
+# Core versions used for the completed CPU training run (Python 3.14.7).
+# The installed torch build was 2.10.0+xpu, but this run used CPU only.
+torch==2.10.0
+torchvision==0.25.0
+transformers==5.16.1
+safetensors==0.8.0
+scikit-learn==1.9.0
+supabase==2.31.0
+Pillow==12.3.0
+numpy==2.5.2

@@ -1,0 +1,7 @@
+fastapi==0.143.3
+uvicorn==0.54.0
+python-multipart==0.0.32
+Pillow>=11
+httpx>=0.28
+pytest==9.1.1
+tzdata>=2026.1
